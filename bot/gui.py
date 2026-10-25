@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -86,6 +87,48 @@ class JobDialog(tk.Toplevel):
             "cron": {"hour": hour, "minute": minute},
             "args": [a.strip() for a in args.split(",") if a.strip()],
         }
+        self.destroy()
+
+
+class GroupPicker(tk.Toplevel):
+    """从微信会话列表勾选群名：支持过滤，多选。"""
+
+    def __init__(self, parent, names):
+        super().__init__(parent)
+        self.title("选择要监听的群（Ctrl/Shift 多选）")
+        self.geometry("380x480")
+        self.transient(parent)
+        self.grab_set()
+        self.selected: List[str] = []
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="过滤：").pack(side="left")
+        self.v_filter = tk.StringVar()
+        ent = ttk.Entry(frm, textvariable=self.v_filter)
+        ent.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        ent.bind("<KeyRelease>", lambda e: self._refill())
+        self._names = names
+        self.lb = tk.Listbox(frm, selectmode="extended", font=("Microsoft YaHei UI", 10))
+        self.lb.pack(fill="both", expand=True, pady=8)
+        self._refill()
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="确定", command=self._ok).pack(side="right", padx=4)
+        ttk.Button(btns, text="取消", command=self.destroy).pack(side="right")
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.wait_window(self)
+
+    def _refill(self):
+        kw = self.v_filter.get().strip()
+        self.lb.delete(0, "end")
+        for n in self._names:
+            if not kw or kw.lower() in n.lower():
+                self.lb.insert("end", n)
+
+    def _ok(self):
+        self.selected = [self.lb.get(i) for i in self.lb.curselection()]
         self.destroy()
 
 
@@ -193,23 +236,42 @@ class App(tk.Tk):
         self.v_nick = tk.StringVar()
         self._watch(self.v_nick)
         ttk.Entry(f, textvariable=self.v_nick, width=32).grid(row=2, column=1, sticky="we", pady=5)
-        ttk.Label(f, text="= 小号的微信昵称；群友 @它 触发 AI", foreground="#94a3b8")\
+        ttk.Label(f, text="可选；填了才能被 @ 唤起\n（不填仍可用 /问 触发）", foreground="#94a3b8")\
             .grid(row=2, column=2, sticky="w")
         self._row(f, 3, "监听的群")
-        self.t_groups = tk.Text(f, height=5, width=34)
+        gf = ttk.Frame(f)
+        gf.grid(row=3, column=1, rowspan=2, sticky="we", pady=5)
+        self.t_groups = tk.Text(gf, height=5, width=34)
         self._watch_text(self.t_groups)
-        self.t_groups.grid(row=3, column=1, rowspan=2, sticky="we", pady=5)
-        ttk.Label(f, text="每行一个，必须与微信里\n显示的群名完全一致", foreground="#94a3b8")\
-            .grid(row=3, column=2, sticky="nw")
+        self.t_groups.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(gf, command=self.t_groups.yview)
+        sb.pack(side="right", fill="y")
+        self.t_groups.config(yscrollcommand=sb.set)
+        tools = ttk.Frame(f)
+        tools.grid(row=3, column=2, sticky="nw")
+        ttk.Button(tools, text="从微信选群", command=self.pick_groups).pack(anchor="w")
+        ttk.Label(f, text="每行一个；也可手动输入\n（须与微信显示完全一致）", foreground="#94a3b8")\
+            .grid(row=4, column=2, sticky="nw")
 
     def _tab_llm(self, nb):
         f = self._tab(nb, "② AI 大模型")
-        self._row(f, 0, "快速选择")
+        self._row(f, 0, "接入方式")
+        self.v_mode = tk.StringVar(value="off")
+        modes = ttk.Frame(f)
+        modes.grid(row=0, column=1, columnspan=2, sticky="w", pady=5)
+        for val, txt in (("off", "暂不接入（占位回复，先把流程跑通）"),
+                         ("cloud", "在线大模型（智谱/DeepSeek/Kimi，免费额度）"),
+                         ("local", "本地 Ollama（免 Key，需已安装并运行）")):
+            ttk.Radiobutton(modes, text=txt, value=val, variable=self.v_mode,
+                            command=self._on_mode).pack(anchor="w")
+        link = ttk.Button(modes, text="↗ 去申请免费 Key（智谱）", command=self._open_key_page)
+        link.pack(anchor="w", pady=(2, 0))
+        self._row(f, 1, "快速选择")
         self.v_preset = tk.StringVar()
         box = ttk.Combobox(f, textvariable=self.v_preset, state="readonly", width=30,
                            values=[f"{k} · {p['label']}" for k, p in LLM_PRESETS.items()])
         box.current(0)
-        box.grid(row=0, column=1, sticky="w", pady=5)
+        box.grid(row=1, column=1, sticky="w", pady=5)
 
         def apply_preset(_e=None):
             key = list(LLM_PRESETS)[box.current()]
@@ -218,23 +280,18 @@ class App(tk.Tk):
                 self.v_url.set(p["base_url"])
                 self.v_model.set(p["model"])
         box.bind("<<ComboboxSelected>>", apply_preset)
-        self._row(f, 1, "API 地址")
+        self._row(f, 2, "API 地址")
         self.v_url = tk.StringVar()
         self._watch(self.v_url)
-        ttk.Entry(f, textvariable=self.v_url, width=44).grid(row=1, column=1, sticky="we", pady=5)
-        self._row(f, 2, "API Key")
+        ttk.Entry(f, textvariable=self.v_url, width=44).grid(row=2, column=1, sticky="we", pady=5)
+        self._row(f, 3, "API Key")
         self.v_key = tk.StringVar()
         self._watch(self.v_key)
-        ttk.Entry(f, textvariable=self.v_key, width=44, show="*").grid(row=2, column=1, sticky="we", pady=5)
-        self._row(f, 3, "模型名")
+        ttk.Entry(f, textvariable=self.v_key, width=44, show="*").grid(row=3, column=1, sticky="we", pady=5)
+        self._row(f, 4, "模型名")
         self.v_model = tk.StringVar()
         self._watch(self.v_model)
-        ttk.Entry(f, textvariable=self.v_model, width=24).grid(row=3, column=1, sticky="w", pady=5)
-        self._row(f, 4, "mock 模式")
-        self.v_mock = tk.BooleanVar(value=True)
-        ttk.Checkbutton(f, text="不调真实接口（没有 Key 时勾上，流程照常跑通）",
-                        variable=self.v_mock, command=self._mark_dirty)\
-            .grid(row=4, column=1, sticky="w", pady=5)
+        ttk.Entry(f, textvariable=self.v_model, width=24).grid(row=4, column=1, sticky="w", pady=5)
         self._row(f, 5, "人设提示词")
         self.t_prompt = tk.Text(f, height=6, width=52)
         self._watch_text(self.t_prompt)
@@ -244,6 +301,44 @@ class App(tk.Tk):
         ttk.Button(bar, text="🔌 测试连接", command=self.test_llm).pack(side="left")
         self.llm_result = ttk.Label(f, text="", foreground="#475569", wraplength=430)
         self.llm_result.grid(row=7, column=1, columnspan=2, sticky="w")
+
+    def _on_mode(self):
+        if self.v_mode.get() == "local":
+            self.v_url.set("http://127.0.0.1:11434/v1")
+            if not self.v_model.get().strip() or "glm" in self.v_model.get():
+                self.v_model.set("qwen2.5:7b")
+        self._mark_dirty()
+
+    def _open_key_page(self):
+        os.startfile("https://open.bigmodel.cn/usercenter/apikeys")  # noqa: S606
+
+    def pick_groups(self):
+        """从微信会话列表读取群名，弹窗勾选。"""
+        self._flash("正在读取微信会话列表…", "#475569")
+        def work():
+            try:
+                from .wxui_channel import list_wechat_sessions
+                names = list_wechat_sessions()
+            except Exception as e:  # noqa: BLE001
+                _post(self, lambda: self._flash(f"❌ 读取失败：{e}（确认微信已登录）", "#dc2626"))
+                return
+            _post(self, lambda: self._show_picker(names))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_picker(self, names):
+        if not names:
+            self._flash("没读到会话列表：请确认微信已登录且主窗口在前台可见过", "#d97706")
+            return
+        dlg = GroupPicker(self, names)
+        picked = dlg.selected
+        if not picked:
+            return
+        existing = [l.strip() for l in self.t_groups.get("1.0", "end").splitlines() if l.strip()]
+        merged = list(dict.fromkeys(existing + [p for p in picked if p not in existing]))
+        self.t_groups.delete("1.0", "end")
+        self.t_groups.insert("1.0", "\n".join(merged))
+        self._mark_dirty()
+        self._flash(f"✅ 已加入 {len(picked)} 个群（注意：列表里也有好友，只需选群聊）")
 
     def _tab_trigger(self, nb):
         f = self._tab(nb, "③ 触发与安全")
@@ -340,7 +435,9 @@ class App(tk.Tk):
         self.v_url.set(llm.get("base_url") or "")
         self.v_key.set(llm.get("api_key") or "")
         self.v_model.set(llm.get("model") or "glm-4-flash")
-        self.v_mock.set(bool(llm.get("mock")))
+        mock = bool(llm.get("mock"))
+        url = self.v_url.get()
+        self.v_mode.set("off" if mock else ("local" if re.search(r"(localhost|127\.0\.0\.1)", url) else "cloud"))
         self.t_prompt.delete("1.0", "end")
         self.t_prompt.insert("1.0", llm.get("system_prompt") or "")
         self.v_at.set(tr.get("at_bot", True))
@@ -369,7 +466,7 @@ class App(tk.Tk):
                         "bot_nickname": self.v_nick.get().strip(),
                         "groups": self.t_groups.get("1.0", "end").splitlines()},
             "llm": {"base_url": self.v_url.get().strip(), "api_key": self.v_key.get().strip(),
-                    "model": self.v_model.get().strip(), "mock": self.v_mock.get(),
+                    "model": self.v_model.get().strip(), "mock": self.v_mode.get() == "off",
                     "system_prompt": self.t_prompt.get("1.0", "end").strip()},
             "trigger": {"at_bot": self.v_at.get(),
                         "ai_prefixes": [s.strip() for s in self.v_prefix.get().split(",") if s.strip()],
@@ -401,12 +498,13 @@ class App(tk.Tk):
     # ------------------------------------------------------------ 就绪检查
     def _missing_items(self) -> List[Tuple[str, int]]:
         items: List[Tuple[str, int]] = []
-        if not self.v_nick.get().strip():
-            items.append(("机器人昵称", 0))
         if not self.t_groups.get("1.0", "end").strip():
             items.append(("监听群名", 0))
-        if not self.v_mock.get() and not (self.v_url.get().strip() and self.v_key.get().strip()):
+        mode = self.v_mode.get()
+        if mode == "cloud" and not (self.v_url.get().strip() and self.v_key.get().strip()):
             items.append(("大模型 API 地址/Key", 1))
+        if mode == "local" and not self.v_url.get().strip():
+            items.append(("Ollama 地址", 1))
         return items
 
     def _refresh_check(self):

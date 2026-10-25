@@ -8,22 +8,22 @@ channel:
   # mock  = 本地模拟通道（不连微信，用于测试/演示）
   type: wxui
   poll_interval: 0.8        # 消息轮询间隔（秒）
-  # TODO: 小号在微信里的昵称（用于识别 "@小号" 触发）
+  # 小号在微信里的昵称（可选：填了才能被 @ 触发；不填仍可用 /问 前缀）
   bot_nickname: "我的小号"
-  # TODO: 要监听的群名列表（必须与微信里显示的群名完全一致）
+  # 要监听的群名列表（在桌面控制台里可"从微信选群"一键勾选）
   groups:
     - "测试群"
     # - "家人群"
 
 llm:
-  # TODO: 填入 OpenAI 兼容接口信息（三选一示例）：
-  #   智谱 GLM  : base_url https://open.bigmodel.cn/api/paas/v4    model glm-4-flash（有免费额度）
-  #   DeepSeek  : base_url https://api.deepseek.com/v1             model deepseek-chat
-  #   Kimi      : base_url https://api.moonshot.cn/v1              model moonshot-v1-8k
+  # 三种接法（桌面控制台里是三个单选）：
+  #   mock=true                     -> 不接入，占位回复
+  #   在线大模型（智谱/DeepSeek/Kimi）-> base_url+api_key+model
+  #   本地 Ollama（免 Key）          -> base_url=http://127.0.0.1:11434/v1  model=qwen2.5:7b
   base_url: ""
   api_key: ""
   model: "glm-4-flash"
-  # 未填 key 时置 true：bot 会用占位回复跑通全流程，不调外部接口
+  # true = 不调用外部接口，bot 用占位回复跑通全流程
   mock: true
   system_prompt: |
     你是一个微信群里的助手机器人，回答要简洁（300字以内）、口语化、有用。

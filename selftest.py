@@ -101,8 +101,27 @@ def test_config_load():
     print("PASS  config.example.yaml 解析正常")
 
 
+def test_validate_flexibility():
+    from bot.manage import validate
+    # 昵称可选
+    d = {"channel": {"groups": ["群"], "bot_nickname": ""}, "llm": {"mock": True}}
+    assert validate(d)["channel"]["bot_nickname"] == ""
+    # 本地 Ollama 免 Key
+    d2 = {"channel": {"groups": ["群"]}, "llm": {"mock": False, "base_url": "http://127.0.0.1:11434/v1", "api_key": ""}}
+    validate(d2)
+    # 在线缺 Key 必须报错
+    d3 = {"channel": {"groups": ["群"]}, "llm": {"mock": False, "base_url": "https://open.bigmodel.cn/api/paas/v4", "api_key": ""}}
+    try:
+        validate(d3)
+        raise AssertionError("在线缺 Key 应该报错")
+    except ValueError:
+        pass
+    print("PASS  校验放宽：昵称可选 / Ollama 免 Key / 在线缺 Key 报错")
+
+
 if __name__ == "__main__":
     test_config_load()
+    test_validate_flexibility()
     test_ai_at_trigger()
     test_ai_prefix_trigger()
     test_ordinary_message_ignored()

@@ -41,8 +41,10 @@ class WxuiChannel(Channel):
         self.main = None
         self.windows: Dict[str, object] = {}
         self._last_rid: Dict[str, tuple] = {}
-        self._recent: Dict[str, List[Tuple[str, str]]] = {}
-        self._own: List[str] = []          # 自己最近发出的文本（规范化后），防回声
+        self._msg_list: Dict[str, object] = {}     # 消息列表控件缓存（失效才重扫）
+        self._err: Dict[str, int] = {}             # 每窗口连续出错次数（自愈用）
+        self._next_reconnect: float = 0.0
+        self._own: List[str] = []                  # 自己最近发出的文本（规范化后），防回声
         pyautogui.FAILSAFE = False
 
     # ------------------------------------------------------------ 启动
@@ -90,7 +92,7 @@ class WxuiChannel(Channel):
         win.wait("visible", timeout=8)
         self.windows[group] = win
         self._last_rid[group] = None
-        self._recent[group] = []
+        self._msg_list[group] = None
         log.info("已打开独立聊天窗口：%s", group)
         return win
 
@@ -146,47 +148,101 @@ class WxuiChannel(Channel):
     # ------------------------------------------------------------ 收消息
     def poll(self) -> List[Message]:
         out: List[Message] = []
+        # 主窗口失联（微信重启/退出）-> 指数退避重连
+        if not self._main_alive():
+            if time.time() >= self._next_reconnect:
+                log.warning("与微信主窗口失去连接，尝试重连…")
+                try:
+                    self.start()
+                    self._next_reconnect = 0.0
+                    log.info("重连成功")
+                except Exception as e:  # noqa: BLE001
+                    log.warning("重连失败：%s（30 秒后重试）", e)
+                    self._next_reconnect = time.time() + 30
+            return out
         for group, win in list(self.windows.items()):
             try:
+                if not win.exists():
+                    raise ChannelError("聊天窗口已被关闭")
                 out.extend(self._poll_window(group, win))
+                self._err[group] = 0
             except Exception as e:  # noqa: BLE001
-                log.warning("轮询窗口 %s 异常: %s", group, e)
+                n = self._err.get(group, 0) + 1
+                self._err[group] = n
+                if n == 1 or n % 60 == 0:  # 首次与每分钟提醒一次，不刷屏
+                    log.warning("监听窗口「%s」异常：%s", group, e)
+                if n in (10, 600):  # ~8 秒后重开一次，之后每 8 分钟
+                    log.info("尝试重新打开群「%s」的聊天窗口", group)
+                    try:
+                        self.ensure_window(group)
+                        self._err[group] = 0
+                    except Exception as e2:  # noqa: BLE001
+                        log.warning("重开窗口「%s」失败：%s", group, e2)
         return out
+
+    def _main_alive(self) -> bool:
+        try:
+            return bool(self.main.exists(timeout=0.2))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _get_msg_list(self, group: str, win):
+        """消息列表控件缓存：有效直接复用，失效才重新扫描（省 UIA 开销）。"""
+        lst = self._msg_list.get(group)
+        try:
+            if lst is not None and (lst.element_info.name or "") == "消息":
+                return lst
+        except Exception:  # noqa: BLE001
+            pass  # 缓存失效
+        try:
+            lists = [l for l in win.descendants(control_type="List") if (l.element_info.name or "") == "消息"]
+            lst = lists[0] if lists else None
+        except Exception:  # noqa: BLE001
+            lst = None
+        self._msg_list[group] = lst
+        return lst
 
     def _poll_window(self, group: str, win) -> List[Message]:
         msgs: List[Message] = []
-        lists = [l for l in win.descendants(control_type="List") if (l.element_info.name or "") == "消息"]
-        if not lists:
-            return msgs
-        items = lists[0].children(control_type="ListItem")
+        lst = self._get_msg_list(group, win)
+        if lst is None:
+            raise ChannelError("找不到消息列表")
+        items = lst.children(control_type="ListItem")
         if not items:
             return msgs
-        last = items[-1]
-        rid = tuple(last.element_info.runtime_id or [])
-        if rid and rid == self._last_rid.get(group):
+        tail_rid = tuple(items[-1].element_info.runtime_id or [])
+        last_rid = self._last_rid.get(group)
+        if last_rid is None:
+            # 首次见到该窗口：只记录指针，不把历史消息当新消息回复
+            self._last_rid[group] = tail_rid
             return msgs
-        self._last_rid[group] = rid
-        parsed = self._parse_item(last)
-        if not parsed:
+        if tail_rid == last_rid:
             return msgs
-        sender, content = parsed
-        if not content or self._is_echo(content):
-            return msgs
+        # 从尾部往前收集所有新消息（两条间隔小于轮询间隔也不丢）
+        new_items = []
+        for it in reversed(items):
+            rid = tuple(it.element_info.runtime_id or [])
+            if rid == last_rid:
+                break
+            new_items.append(it)
+            if len(new_items) >= 20:  # 突发消息防洪：一次最多追 20 条
+                break
+        self._last_rid[group] = tail_rid
         nick = self.cfg.channel.bot_nickname
-        recent = self._recent.setdefault(group, [])
-        key = (sender, content)
-        if key in recent[-20:]:
-            return msgs
-        recent.append(key)
-        log.info("[%s] %s: %s", group, sender or "自己", content[:60])
-        msgs.append(
-            Message(
+        for it in reversed(new_items):  # 恢复时间顺序
+            parsed = self._parse_item(it)
+            if not parsed:
+                continue
+            sender, content = parsed
+            if not content or self._is_echo(content):
+                continue
+            log.info("[%s] %s: %s", group, sender or "自己", content[:60])
+            msgs.append(Message(
                 group=group,
                 sender=sender or "",
                 content=content,
                 is_at_bot=bool(nick and f"@{nick}" in content),
-            )
-        )
+            ))
         return msgs
 
     def _parse_item(self, item) -> Optional[Tuple[Optional[str], Optional[str]]]:
@@ -259,3 +315,22 @@ class WxuiChannel(Channel):
 
     def stop(self) -> None:
         log.info("通道停止")
+
+
+SYSTEM_SESSIONS = {"文件传输助手", "微信支付", "公众号", "订阅号消息", "服务通知", "折叠的聊天",
+                   "腾讯新闻", "QQ邮箱提醒", "腾讯文档", "视频号私信"}
+
+
+def list_wechat_sessions() -> List[str]:
+    """读取微信会话列表里最近出现的聊天名（好友+群聊，供 GUI 勾选）。只读，不动 UI。"""
+    desktop = Desktop(backend="uia")
+    main = desktop.window(class_name_re="mmui::MainWindow", title_re="微信|Weixin")
+    main.wait("visible ready", timeout=8)
+    names = set()
+    for it in main.descendants(control_type="ListItem"):
+        aid = it.element_info.automation_id or ""
+        if aid.startswith("session_item_"):
+            n = aid[len("session_item_"):]
+            if n and n not in SYSTEM_SESSIONS:
+                names.add(n)
+    return sorted(names)

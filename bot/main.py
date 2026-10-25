@@ -61,7 +61,7 @@ def setup_pushes(cfg: BotConfig, channel: Channel) -> object | None:
         return None
     from apscheduler.schedulers.background import BackgroundScheduler
 
-    sched = BackgroundScheduler()
+    sched = BackgroundScheduler(job_defaults={"coalesce": True, "misfire_grace_time": 300})
 
     def run_push(job) -> None:
         try:
@@ -141,7 +141,10 @@ def run_main(argv: list[str] | None = None) -> int:
                         log.exception("处理消息异常")
                         continue
                     if reply:
-                        channel.send(msg.group, reply)
+                        try:
+                            channel.send(msg.group, reply)
+                        except Exception:  # noqa: BLE001
+                            log.exception("发送到 [%s] 失败", msg.group)
                         time.sleep(0.8)  # 发送节流，行为更像真人
             except Exception:  # noqa: BLE001
                 log.exception("轮询异常，5 秒后重试")

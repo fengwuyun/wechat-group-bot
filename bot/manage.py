@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import threading
 import time
@@ -59,8 +60,7 @@ def validate(d: dict) -> dict:
     groups = [g.strip() for g in (ch.get("groups") or []) if str(g).strip()]
     if not groups:
         raise ValueError("至少要填一个监听群名")
-    if not str(ch.get("bot_nickname") or "").strip():
-        raise ValueError("bot 昵称不能为空（用于识别 @机器人）")
+    # 昵称可选：不填时仍可用 /问 前缀触发 AI
     try:
         ch["poll_interval"] = max(0.3, float(ch.get("poll_interval") or 0.8))
     except (TypeError, ValueError):
@@ -71,8 +71,13 @@ def validate(d: dict) -> dict:
     llm = d.get("llm") or {}
     llm["model"] = str(llm.get("model") or "").strip() or "glm-4-flash"
     llm["mock"] = bool(llm.get("mock"))
-    if not llm["mock"] and not (str(llm.get("base_url") or "").strip() and str(llm.get("api_key") or "").strip()):
-        raise ValueError("已关闭 mock 模式，必须填写 base_url 和 api_key")
+    if not llm["mock"]:
+        url = str(llm.get("base_url") or "").strip()
+        if not url:
+            raise ValueError("已选择接入大模型，必须填写 API 地址")
+        key = str(llm.get("api_key") or "").strip()
+        if not key and not re.search(r"(localhost|127\.0\.0\.1)", url):
+            raise ValueError("在线大模型必须填写 API Key（本地 Ollama 可不填）")
 
     rl = d.get("rate_limit") or {}
     rl["per_group_per_minute"] = max(1, _as_int(rl.get("per_group_per_minute") or 8, 1, 120, "每分钟回复上限"))
