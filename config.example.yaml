@@ -1,0 +1,63 @@
+# ============================================================
+# 微信群 Bot 配置模板
+# 复制为 config.yaml 后填写。所有需要改的地方都标了 TODO。
+# ============================================================
+
+channel:
+  # wxui  = 真实微信4.x UI自动化通道（默认）
+  # mock  = 本地模拟通道（不连微信，用于测试/演示）
+  type: wxui
+  poll_interval: 0.8        # 消息轮询间隔（秒）
+  # TODO: 小号在微信里的昵称（用于识别 "@小号" 触发）
+  bot_nickname: "我的小号"
+  # TODO: 要监听的群名列表（必须与微信里显示的群名完全一致）
+  groups:
+    - "测试群"
+    # - "家人群"
+
+llm:
+  # TODO: 填入 OpenAI 兼容接口信息（三选一示例）：
+  #   智谱 GLM  : base_url https://open.bigmodel.cn/api/paas/v4    model glm-4-flash（有免费额度）
+  #   DeepSeek  : base_url https://api.deepseek.com/v1             model deepseek-chat
+  #   Kimi      : base_url https://api.moonshot.cn/v1              model moonshot-v1-8k
+  base_url: ""
+  api_key: ""
+  model: "glm-4-flash"
+  # 未填 key 时置 true：bot 会用占位回复跑通全流程，不调外部接口
+  mock: true
+  system_prompt: |
+    你是一个微信群里的助手机器人，回答要简洁（300字以内）、口语化、有用。
+    群友问题五花八门，不确定时直说不确定，不要编造。
+    不要讨论政治敏感话题。
+
+trigger:
+  at_bot: true               # 群里 @小号 触发 AI 问答
+  ai_prefixes: ["/问", "/ai"] # 前缀触发 AI 问答
+  command_prefix: "/"         # 指令前缀：/帮助 /天气 /日报 ...
+
+rate_limit:
+  per_group_per_minute: 8    # 每群每分钟最多回复条数（防刷屏、防风控）
+  max_reply_chars: 800       # 单条回复最大长度，超出截断
+  quiet_hours: [23, 7]       # 免打扰时段 23:00~次日7:00（定时推送仍会执行，AI/指令静默）
+
+memory:
+  history_per_group: 12      # 每群保留的上下文条数
+
+push:
+  # 定时推送任务：到点在指定群发送某技能的产出
+  # skill 可选: daily_news（60秒读懂世界日报）/ weather（需在 args 里给城市）
+  jobs: []
+  #  - name: 早报
+  #    group: "测试群"
+  #    cron: { hour: 8, minute: 30 }   # 每天 8:30
+  #    skill: daily_news
+  #  - name: 北京天气
+  #    group: "测试群"
+  #    cron: { hour: 7, minute: 0 }
+  #    skill: weather
+  #    args: ["北京"]
+
+admin:
+  # 管理员微信昵称：免打扰时段内仍可用指令
+  senders: []
+  #  - "我的大号"

@@ -1,0 +1,16 @@
+# 本地敏感/生成文件
+config.yaml
+config.yaml.bak
+bot.log
+bot.pid
+ui.json
+probe_output.txt
+webui_test.log
+
+# Python
+__pycache__/
+*.pyc
+
+# 打包中间产物（exe 成品保留在 dist/）
+build/
+*.spec

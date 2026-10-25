@@ -1,0 +1,10 @@
+# 微信 4.x UI 自动化通道
+pywinauto>=0.6.9
+pyautogui>=0.9.54
+pywin32>=310
+pyperclip>=1.9
+
+# Bot 核心
+httpx>=0.27
+APScheduler>=3.10,<4
+PyYAML>=6.0
